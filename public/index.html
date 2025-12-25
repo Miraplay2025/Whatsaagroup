@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WhatsApp Manager</title>
+
+<style>
+body{
+  margin:0;
+  font-family:Arial,sans-serif;
+  background:linear-gradient(135deg,#667eea,#764ba2);
+  color:#fff;
+}
+.container{
+  max-width:460px;
+  margin:auto;
+  padding:20px;
+}
+.card{
+  background:#fff;
+  color:#000;
+  border-radius:16px;
+  padding:18px;
+  margin-top:15px;
+}
+input,textarea,button{
+  width:100%;
+  padding:12px;
+  margin-top:10px;
+  border-radius:8px;
+  border:1px solid #ccc;
+  font-size:15px;
+}
+button{
+  background:#28a745;
+  color:#fff;
+  border:none;
+}
+.menu button{
+  background:#007bff;
+}
+.hidden{display:none}
+.log{
+  font-size:13px;
+  border-bottom:1px solid #eee;
+  padding:4px 0;
+}
+.group{
+  border-bottom:1px solid #ddd;
+  padding:6px 0;
+}
+</style>
+</head>
+
+<body>
+<div class="container">
+  <h2>WhatsApp Manager</h2>
+
+  <!-- UPLOAD -->
+  <div class="card">
+    <input type="file" id="zip">
+    <button onclick="upload()">Upload ZIP</button>
+    <button onclick="connect()">Conectar WhatsApp</button>
+    <div id="status"></div>
+  </div>
+
+  <!-- MENU -->
+  <div class="card menu hidden" id="menu">
+    <button onclick="show('groups')">📦 Ver Grupos</button>
+    <button onclick="show('send')">📨 Enviar Mensagem</button>
+  </div>
+
+  <!-- ACCOUNT -->
+  <div class="card hidden" id="account"></div>
+
+  <!-- GROUPS -->
+  <div class="card hidden" id="groups"></div>
+
+  <!-- SEND -->
+  <div class="card hidden" id="send">
+    <input id="number" placeholder="Número (com DDD)">
+    <textarea id="message" placeholder="Mensagem"></textarea>
+    <button onclick="send()">Enviar Mensagem</button>
+  </div>
+
+  <!-- LOGS -->
+  <div class="card">
+    <h4>Logs</h4>
+    <div id="logs"></div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const socket = io();
+const logs = document.getElementById('logs');
+const status = document.getElementById('status');
+
+function addLog(msg){
+  const d=document.createElement('div');
+  d.className='log';
+  d.textContent=msg;
+  logs.appendChild(d);
+  logs.scrollTop=logs.scrollHeight;
+}
+
+function upload(){
+  const file=document.getElementById('zip').files[0];
+  if(!file) return alert('Selecione o ZIP');
+
+  const fd=new FormData();
+  fd.append('zip',file);
+
+  fetch('/upload',{method:'POST',body:fd})
+    .then(r=>r.json())
+    .then(d=>{
+      status.textContent=d.success?'ZIP válido e carregado':'Erro: '+d.error;
+    });
+}
+
+function connect(){
+  status.textContent='Conectando...';
+  socket.emit('connect-whatsapp');
+}
+
+function show(id){
+  ['groups','send'].forEach(i=>document.getElementById(i).classList.add('hidden'));
+  document.getElementById(id).classList.remove('hidden');
+}
+
+function send(){
+  socket.emit('send-message',{
+    number:document.getElementById('number').value,
+    message:document.getElementById('message').value
+  });
+}
+
+socket.on('log',addLog);
+
+socket.on('session-info', data=>{
+  document.getElementById('menu').classList.remove('hidden');
+  document.getElementById('account').classList.remove('hidden');
+
+  document.getElementById('account').innerHTML=`
+    <h3>Conta</h3>
+    Nome: ${data.name}<br>
+    Número: ${data.number}
+  `;
+
+  if(data.groups.length===0){
+    document.getElementById('groups').innerHTML='<h3>Nenhum grupo encontrado</h3>';
+  } else {
+    document.getElementById('groups').innerHTML=
+      '<h3>Grupos</h3>'+
+      data.groups.map(g=>`
+        <div class="group">
+          ${g.name}<br>
+          Membros: ${g.members}
+        </div>
+      `).join('');
+  }
+});
+</script>
+</body>
+</html>
