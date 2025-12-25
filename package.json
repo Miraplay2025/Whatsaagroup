@@ -1,0 +1,16 @@
+{
+  "name": "whatsapp-upload-connect",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "latest",
+    "socket.io": "latest",
+    "whatsapp-web.js": "latest",
+    "multer": "latest",
+    "adm-zip": "latest",
+    "cors": "latest"
+  }
+}
