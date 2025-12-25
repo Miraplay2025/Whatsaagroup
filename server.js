@@ -20,21 +20,21 @@ const upload = multer({ dest: 'uploads/' });
 let clientInstance = null;
 
 /* =========================
-   UTIL: LOG
+   LOG CENTRAL
 ========================= */
-function log(socket, msg){
+function log(socket, msg) {
   console.log(msg);
   socket.emit('log', msg);
 }
 
 /* =========================
-   VALIDATE ZIP
+   VALIDAR ZIP DE SESSÃO
 ========================= */
-function validateZipSession(zipPath){
+function validateZipSession(zipPath) {
   try {
     const zip = new AdmZip(zipPath);
     const entries = zip.getEntries().map(e => e.entryName);
-    // valida estrutura mínima do whatsapp-web.js
+    // estrutura mínima esperada do whatsapp-web.js
     return entries.some(e => e.includes('.wwebjs_auth'));
   } catch {
     return false;
@@ -42,60 +42,77 @@ function validateZipSession(zipPath){
 }
 
 /* =========================
-   UPLOAD ZIP
+   UPLOAD + EXTRAÇÃO DO ZIP
 ========================= */
 app.post('/upload', upload.single('zip'), (req, res) => {
   if (!req.file) {
-    return res.json({ success:false, error:'ZIP não enviado' });
+    return res.json({ success: false, error: 'ZIP não enviado' });
   }
 
-  const valid = validateZipSession(req.file.path);
-  if (!valid) {
+  if (!validateZipSession(req.file.path)) {
     fs.unlinkSync(req.file.path);
-    return res.json({ success:false, error:'ZIP inválido (sessão não encontrada)' });
+    return res.json({
+      success: false,
+      error: 'ZIP inválido (sessão WhatsApp não encontrada)'
+    });
   }
 
   const authDir = path.join(__dirname, '.wwebjs_auth');
   if (!fs.existsSync(authDir)) fs.mkdirSync(authDir);
 
-  const zip = new AdmZip(req.file.path);
-  zip.extractAllTo(authDir, true);
-  fs.unlinkSync(req.file.path);
+  try {
+    const zip = new AdmZip(req.file.path);
+    zip.extractAllTo(authDir, true);
+    fs.unlinkSync(req.file.path);
 
-  res.json({ success:true });
+    return res.json({ success: true });
+  } catch (e) {
+    return res.json({ success: false, error: e.message });
+  }
 });
 
 /* =========================
-   START SESSION
+   INICIAR WHATSAPP
 ========================= */
-function startSession(socket){
+function startSession(socket) {
   if (clientInstance) {
-    log(socket,'⚠️ Sessão já ativa');
+    log(socket, '⚠️ WhatsApp já está conectado');
     return;
   }
 
-  log(socket,'🚀 Iniciando conexão com WhatsApp...');
+  log(socket, '🚀 Iniciando conexão com WhatsApp...');
 
   clientInstance = new Client({
     authStrategy: new LocalAuth(),
-    puppeteer:{
-      headless:true,
-      args:['--no-sandbox','--disable-setuid-sandbox']
+    puppeteer: {
+      headless: true,
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu'
+      ]
     }
   });
 
   clientInstance.on('ready', async () => {
-    log(socket,'✅ WhatsApp conectado');
+    log(socket, '✅ WhatsApp conectado com sucesso');
 
     const info = clientInstance.info;
-    log(socket,`👤 Conta: ${info.pushname} (${info.me.user})`);
+    log(socket, `👤 Conta: ${info.pushname} (${info.me.user})`);
 
-    const chats = await clientInstance.getChats();
+    let chats = [];
+    try {
+      chats = await clientInstance.getChats();
+    } catch {
+      log(socket, '⚠️ Erro ao buscar chats');
+    }
+
     const groups = chats.filter(c => c.isGroup);
+    log(socket, `📦 Grupos encontrados: ${groups.length}`);
 
-    log(socket,`📦 Grupos encontrados: ${groups.length}`);
-
-    socket.emit('session-info',{
+    socket.emit('session-info', {
       name: info.pushname,
       number: info.me.user,
       groups: groups.map(g => ({
@@ -106,14 +123,20 @@ function startSession(socket){
   });
 
   clientInstance.on('auth_failure', () => {
-    log(socket,'❌ Falha de autenticação');
+    log(socket, '❌ Falha de autenticação (ZIP inválido ou sessão expirada)');
+    clientInstance = null;
+  });
+
+  clientInstance.on('disconnected', reason => {
+    log(socket, `❌ WhatsApp desconectado: ${reason}`);
+    clientInstance = null;
   });
 
   clientInstance.initialize();
 }
 
 /* =========================
-   SEND MESSAGE
+   SOCKET.IO
 ========================= */
 io.on('connection', socket => {
 
@@ -123,24 +146,32 @@ io.on('connection', socket => {
 
   socket.on('send-message', async data => {
     if (!clientInstance) {
-      log(socket,'❌ WhatsApp não conectado');
+      log(socket, '❌ WhatsApp não está conectado');
       return;
     }
 
-    const number = data.number.replace(/\D/g,'') + '@c.us';
-    log(socket,`📨 Enviando mensagem para ${data.number}...`);
+    if (!data.number || !data.message) {
+      log(socket, '❌ Número ou mensagem inválidos');
+      return;
+    }
+
+    const numberId = data.number.replace(/\D/g, '') + '@c.us';
+    log(socket, `📨 Enviando mensagem para ${data.number}...`);
 
     try {
-      await clientInstance.sendMessage(number, data.message);
-      log(socket,'✅ Mensagem enviada com sucesso');
+      await clientInstance.sendMessage(numberId, data.message);
+      log(socket, '✅ Mensagem enviada com sucesso');
     } catch (e) {
-      log(socket,'❌ Erro ao enviar mensagem');
+      log(socket, '❌ Erro ao enviar mensagem');
     }
   });
 
 });
 
+/* =========================
+   START SERVER
+========================= */
 const PORT = process.env.PORT || 10000;
-server.listen(PORT, () =>
-  console.log(`🌐 Servidor rodando na porta ${PORT}`)
-);
+server.listen(PORT, () => {
+  console.log(`🌐 Servidor rodando na porta ${PORT}`);
+});
