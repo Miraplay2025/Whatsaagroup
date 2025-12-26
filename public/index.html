@@ -27,21 +27,24 @@ button,input{
   border:none;
   margin-top:10px;
 }
-button{background:#00c853;color:#fff}
+button{background:#00c853;color:#fff;cursor:pointer}
 .group{background:rgba(255,255,255,.1);padding:10px;border-radius:8px;margin-top:6px}
-.logs{max-height:220px;overflow:auto;font-size:13px}
+.logs{max-height:240px;overflow:auto;font-size:13px}
 
 /* MODAL */
 .modal{
   position:fixed;inset:0;
   background:rgba(0,0,0,.7);
-  display:none;align-items:center;justify-content:center
+  display:none;
+  align-items:center;
+  justify-content:center;
 }
 .modal-box{
   background:#1e293b;
   padding:20px;
   border-radius:14px;
-  width:90%;max-width:400px
+  width:90%;
+  max-width:400px;
 }
 </style>
 </head>
@@ -50,29 +53,27 @@ button{background:#00c853;color:#fff}
 <div class="container">
 
 <div class="card">
-<h2>Upload da Sessão ZIP</h2>
-<input type="file" id="zip">
-<button onclick="upload()">Enviar ZIP</button>
+  <h2>Upload da Sessão WhatsApp</h2>
+  <input type="file" id="zip" accept=".zip">
+  <button onclick="upload()">📁 Enviar ZIP</button>
 </div>
 
 <div class="card">
-<h2>Validar Sessão</h2>
-<input id="session" placeholder="Nome da sessão">
-<button onclick="validate()">Validar WhatsApp</button>
+  <button onclick="validate()">🔍 Validar WhatsApp</button>
 </div>
 
 <div class="card">
-<h3>Conta</h3>
-<div id="account"></div>
+  <h3>Conta</h3>
+  <div id="account">—</div>
 </div>
 
 <div class="card">
-<h3>Grupos</h3>
-<div id="groups"></div>
+  <h3>Grupos</h3>
+  <div id="groups">—</div>
 </div>
 
 <div class="card">
-<button onclick="openModal()">📩 Enviar Mensagem</button>
+  <button onclick="openModal()">📩 Enviar Mensagem</button>
 </div>
 
 <div class="card logs" id="logs"></div>
@@ -81,18 +82,19 @@ button{background:#00c853;color:#fff}
 
 <!-- MODAL -->
 <div class="modal" id="modal">
-<div class="modal-box">
-<h3>Enviar Mensagem</h3>
-<input id="number" placeholder="Número com DDI">
-<input id="message" placeholder="Mensagem">
-<button onclick="send()">Enviar</button>
-<button onclick="closeModal()">Fechar</button>
-</div>
+  <div class="modal-box">
+    <h3>Enviar Mensagem</h3>
+    <input id="number" placeholder="Número com DDI">
+    <input id="message" placeholder="Mensagem">
+    <button onclick="send()">Enviar</button>
+    <button onclick="closeModal()">Fechar</button>
+  </div>
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
 <script>
 const socket = io();
+const logs = document.getElementById('logs');
 
 function log(m){
   const d=document.createElement('div');
@@ -103,18 +105,22 @@ function log(m){
 socket.on('log',log);
 
 async function upload(){
-  const f=zip.files[0];
-  const fd=new FormData();
+  const f = zip.files[0];
+  if(!f){ log('❌ Selecione um ZIP'); return; }
+  const fd = new FormData();
   fd.append('zip',f);
   await fetch('/upload',{method:'POST',body:fd});
-  log('📁 ZIP enviado');
+  log('📁 ZIP enviado com sucesso');
 }
+
 function validate(){
-  socket.emit('validate-session',session.value);
+  socket.emit('validate-whatsapp');
 }
+
 socket.on('account',d=>{
-  account.innerHTML=`<b>${d.name}</b><br>${d.number}`;
+  account.innerHTML = `<b>${d.name}</b><br>${d.number}`;
 });
+
 socket.on('groups',g=>{
   groups.innerHTML='';
   g.forEach(x=>{
@@ -122,12 +128,14 @@ socket.on('groups',g=>{
       `<div class="group">${x.name} — ${x.total} membros</div>`;
   });
 });
+
 socket.on('no-groups',()=>{
   groups.textContent='Nenhum grupo encontrado';
 });
 
-function openModal(){modal.style.display='flex'}
-function closeModal(){modal.style.display='none'}
+function openModal(){ modal.style.display='flex'; }
+function closeModal(){ modal.style.display='none'; }
+
 function send(){
   socket.emit('send-message',{
     number:number.value,
