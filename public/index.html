@@ -2,165 +2,138 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>WhatsApp Manager</title>
+<title>WhatsApp Session Validator</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
 
 <style>
 body{
   margin:0;
-  font-family:Arial,sans-serif;
-  background:linear-gradient(135deg,#667eea,#764ba2);
+  font-family:Segoe UI,Arial;
+  background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);
   color:#fff;
 }
-.container{
-  max-width:460px;
-  margin:auto;
-  padding:20px;
-}
+.container{max-width:900px;margin:auto;padding:20px}
 .card{
-  background:#fff;
-  color:#000;
-  border-radius:16px;
-  padding:18px;
-  margin-top:15px;
+  background:rgba(255,255,255,.08);
+  backdrop-filter:blur(10px);
+  border-radius:14px;
+  padding:20px;
+  margin-bottom:20px;
 }
-input,textarea,button{
+button,input{
   width:100%;
-  padding:12px;
-  margin-top:10px;
+  padding:14px;
   border-radius:8px;
-  border:1px solid #ccc;
-  font-size:15px;
-}
-button{
-  background:#28a745;
-  color:#fff;
   border:none;
+  margin-top:10px;
 }
-.menu button{
-  background:#007bff;
+button{background:#00c853;color:#fff}
+.group{background:rgba(255,255,255,.1);padding:10px;border-radius:8px;margin-top:6px}
+.logs{max-height:220px;overflow:auto;font-size:13px}
+
+/* MODAL */
+.modal{
+  position:fixed;inset:0;
+  background:rgba(0,0,0,.7);
+  display:none;align-items:center;justify-content:center
 }
-.hidden{display:none}
-.log{
-  font-size:13px;
-  border-bottom:1px solid #eee;
-  padding:4px 0;
-}
-.group{
-  border-bottom:1px solid #ddd;
-  padding:6px 0;
+.modal-box{
+  background:#1e293b;
+  padding:20px;
+  border-radius:14px;
+  width:90%;max-width:400px
 }
 </style>
 </head>
 
 <body>
 <div class="container">
-  <h2>WhatsApp Manager</h2>
 
-  <!-- UPLOAD -->
-  <div class="card">
-    <input type="file" id="zip">
-    <button onclick="upload()">Upload ZIP</button>
-    <button onclick="connect()">Conectar WhatsApp</button>
-    <div id="status"></div>
-  </div>
+<div class="card">
+<h2>Upload da Sessão ZIP</h2>
+<input type="file" id="zip">
+<button onclick="upload()">Enviar ZIP</button>
+</div>
 
-  <!-- MENU -->
-  <div class="card menu hidden" id="menu">
-    <button onclick="show('groups')">📦 Ver Grupos</button>
-    <button onclick="show('send')">📨 Enviar Mensagem</button>
-  </div>
+<div class="card">
+<h2>Validar Sessão</h2>
+<input id="session" placeholder="Nome da sessão">
+<button onclick="validate()">Validar WhatsApp</button>
+</div>
 
-  <!-- ACCOUNT -->
-  <div class="card hidden" id="account"></div>
+<div class="card">
+<h3>Conta</h3>
+<div id="account"></div>
+</div>
 
-  <!-- GROUPS -->
-  <div class="card hidden" id="groups"></div>
+<div class="card">
+<h3>Grupos</h3>
+<div id="groups"></div>
+</div>
 
-  <!-- SEND -->
-  <div class="card hidden" id="send">
-    <input id="number" placeholder="Número (com DDD)">
-    <textarea id="message" placeholder="Mensagem"></textarea>
-    <button onclick="send()">Enviar Mensagem</button>
-  </div>
+<div class="card">
+<button onclick="openModal()">📩 Enviar Mensagem</button>
+</div>
 
-  <!-- LOGS -->
-  <div class="card">
-    <h4>Logs</h4>
-    <div id="logs"></div>
-  </div>
+<div class="card logs" id="logs"></div>
+
+</div>
+
+<!-- MODAL -->
+<div class="modal" id="modal">
+<div class="modal-box">
+<h3>Enviar Mensagem</h3>
+<input id="number" placeholder="Número com DDI">
+<input id="message" placeholder="Mensagem">
+<button onclick="send()">Enviar</button>
+<button onclick="closeModal()">Fechar</button>
+</div>
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
 <script>
 const socket = io();
-const logs = document.getElementById('logs');
-const status = document.getElementById('status');
 
-function addLog(msg){
+function log(m){
   const d=document.createElement('div');
-  d.className='log';
-  d.textContent=msg;
+  d.textContent=m;
   logs.appendChild(d);
   logs.scrollTop=logs.scrollHeight;
 }
+socket.on('log',log);
 
-function upload(){
-  const file=document.getElementById('zip').files[0];
-  if(!file) return alert('Selecione o ZIP');
-
+async function upload(){
+  const f=zip.files[0];
   const fd=new FormData();
-  fd.append('zip',file);
-
-  fetch('/upload',{method:'POST',body:fd})
-    .then(r=>r.json())
-    .then(d=>{
-      status.textContent=d.success?'ZIP válido e carregado':'Erro: '+d.error;
-    });
+  fd.append('zip',f);
+  await fetch('/upload',{method:'POST',body:fd});
+  log('📁 ZIP enviado');
 }
-
-function connect(){
-  status.textContent='Conectando...';
-  socket.emit('connect-whatsapp');
+function validate(){
+  socket.emit('validate-session',session.value);
 }
+socket.on('account',d=>{
+  account.innerHTML=`<b>${d.name}</b><br>${d.number}`;
+});
+socket.on('groups',g=>{
+  groups.innerHTML='';
+  g.forEach(x=>{
+    groups.innerHTML+=
+      `<div class="group">${x.name} — ${x.total} membros</div>`;
+  });
+});
+socket.on('no-groups',()=>{
+  groups.textContent='Nenhum grupo encontrado';
+});
 
-function show(id){
-  ['groups','send'].forEach(i=>document.getElementById(i).classList.add('hidden'));
-  document.getElementById(id).classList.remove('hidden');
-}
-
+function openModal(){modal.style.display='flex'}
+function closeModal(){modal.style.display='none'}
 function send(){
   socket.emit('send-message',{
-    number:document.getElementById('number').value,
-    message:document.getElementById('message').value
+    number:number.value,
+    message:message.value
   });
 }
-
-socket.on('log',addLog);
-
-socket.on('session-info', data=>{
-  document.getElementById('menu').classList.remove('hidden');
-  document.getElementById('account').classList.remove('hidden');
-
-  document.getElementById('account').innerHTML=`
-    <h3>Conta</h3>
-    Nome: ${data.name}<br>
-    Número: ${data.number}
-  `;
-
-  if(data.groups.length===0){
-    document.getElementById('groups').innerHTML='<h3>Nenhum grupo encontrado</h3>';
-  } else {
-    document.getElementById('groups').innerHTML=
-      '<h3>Grupos</h3>'+
-      data.groups.map(g=>`
-        <div class="group">
-          ${g.name}<br>
-          Membros: ${g.members}
-        </div>
-      `).join('');
-  }
-});
 </script>
 </body>
 </html>
