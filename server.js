@@ -16,16 +16,17 @@ app.use(cors());
 app.use(express.static('public'));
 
 const upload = multer({ dest:'uploads/' });
-let activeClient = null;
+let client = null;
+let sessionId = null;
 
 function log(socket,msg){
   console.log(msg);
   socket.emit('log', msg);
 }
 
-/* =======================
-   UPLOAD ZIP
-======================= */
+/* =========================
+   UPLOAD DO ZIP DA SESSÃO
+========================= */
 app.post('/upload', upload.single('zip'), (req,res)=>{
   if(!req.file) return res.status(400).send('ZIP não enviado');
 
@@ -33,30 +34,46 @@ app.post('/upload', upload.single('zip'), (req,res)=>{
   zip.extractAllTo('.wwebjs_auth', true);
   fs.unlinkSync(req.file.path);
 
+  // Detecta automaticamente o nome da sessão dentro do ZIP
+  const sessions = fs.readdirSync('.wwebjs_auth')
+    .filter(f => f.startsWith('session-'));
+
+  if(!sessions.length){
+    return res.status(400).send('Nenhuma sessão encontrada no ZIP');
+  }
+
+  sessionId = sessions[0].replace('session-','');
   res.json({ ok:true });
 });
 
-/* =======================
+/* =========================
    SOCKET
-======================= */
+========================= */
 io.on('connection', socket=>{
 
-  socket.on('validate-session', async session=>{
-    log(socket,'🔍 Validando sessão...');
-
-    const authPath = path.join(__dirname,'.wwebjs_auth',`session-${session}`);
-    if(!fs.existsSync(authPath)){
-      log(socket,'❌ Sessão NÃO existe');
+  socket.on('validate-whatsapp', async ()=>{
+    if(!sessionId){
+      log(socket,'❌ Nenhuma sessão carregada');
       socket.emit('invalid');
       return;
     }
 
-    const client = new Client({
-      authStrategy: new LocalAuth({ clientId:session }),
-      puppeteer:{ headless:true, args:['--no-sandbox'] }
-    });
+    log(socket,'🔍 Validando sessão do WhatsApp...');
 
-    activeClient = client;
+    const authPath = path.join(__dirname,'.wwebjs_auth',`session-${sessionId}`);
+    if(!fs.existsSync(authPath)){
+      log(socket,'❌ Sessão inválida');
+      socket.emit('invalid');
+      return;
+    }
+
+    client = new Client({
+      authStrategy: new LocalAuth({ clientId:sessionId }),
+      puppeteer:{
+        headless:true,
+        args:['--no-sandbox','--disable-setuid-sandbox']
+      }
+    });
 
     client.on('ready', async ()=>{
       const info = client.info;
@@ -72,19 +89,17 @@ io.on('connection', socket=>{
       if(!groups.length){
         socket.emit('no-groups');
       } else {
-        socket.emit('groups',
-          groups.map(g=>({
-            name:g.name,
-            total:g.participants.length
-          }))
-        );
+        socket.emit('groups', groups.map(g=>({
+          name:g.name,
+          total:g.participants.length
+        })));
       }
 
-      log(socket,'✅ Sessão ATIVA e válida');
+      log(socket,'✅ Sessão ATIVA e validada com sucesso');
     });
 
     client.on('auth_failure', ()=>{
-      log(socket,'❌ Sessão inválida');
+      log(socket,'❌ Falha de autenticação – sessão inválida');
       socket.emit('invalid');
     });
 
@@ -92,13 +107,13 @@ io.on('connection', socket=>{
   });
 
   socket.on('send-message', async d=>{
-    if(!activeClient) return;
+    if(!client){
+      log(socket,'❌ WhatsApp não conectado');
+      return;
+    }
     try{
-      await activeClient.sendMessage(
-        `${d.number}@c.us`,
-        d.message
-      );
-      log(socket,'📨 Mensagem enviada com sucesso');
+      await client.sendMessage(`${d.number}@c.us`, d.message);
+      log(socket,`📨 Mensagem enviada para ${d.number}`);
     }catch{
       log(socket,'❌ Erro ao enviar mensagem');
     }
