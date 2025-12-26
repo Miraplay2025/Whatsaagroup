@@ -2,154 +2,100 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<title>WhatsApp Session Validator</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WhatsApp Session via Drive</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 
 <style>
-body{
-  margin:0;
-  font-family:Segoe UI,Arial;
-  background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);
-  color:#fff;
-}
-.container{max-width:900px;margin:auto;padding:20px}
-.card{
-  background:rgba(255,255,255,.08);
-  backdrop-filter:blur(10px);
-  border-radius:14px;
-  padding:20px;
-  margin-bottom:20px;
-}
-button,input{
-  width:100%;
-  padding:14px;
-  border-radius:8px;
-  border:none;
-  margin-top:10px;
-}
-button{background:#00c853;color:#fff;cursor:pointer}
-.group{background:rgba(255,255,255,.1);padding:10px;border-radius:8px;margin-top:6px}
-.logs{max-height:240px;overflow:auto;font-size:13px}
-
-/* MODAL */
-.modal{
-  position:fixed;inset:0;
-  background:rgba(0,0,0,.7);
-  display:none;
-  align-items:center;
-  justify-content:center;
-}
-.modal-box{
-  background:#1e293b;
-  padding:20px;
-  border-radius:14px;
-  width:90%;
-  max-width:400px;
-}
+body { font-family: Arial; background: linear-gradient(135deg,#141e30,#243b55); color:#fff; padding:20px; }
+.container { max-width:900px; margin:auto; }
+.card { background:rgba(255,255,255,.08); padding:20px; border-radius:14px; margin-bottom:20px; }
+input,button,textarea { width:100%; padding:14px; margin-top:10px; border:none; border-radius:10px; }
+button { background:#25D366; font-weight:bold; cursor:pointer; }
+button:disabled { background:#777; cursor:not-allowed; }
+.logs { background:#000; color:#0f0; height:260px; overflow:auto; padding:10px; }
+.group { border-bottom:1px solid rgba(255,255,255,.2); padding:8px 0; }
+.hidden { display:none; }
 </style>
 </head>
 
 <body>
 <div class="container">
+  <h1>📦 WhatsApp via Google Drive</h1>
 
-<div class="card">
-  <h2>Validar Sessão WhatsApp</h2>
-  <input type="file" id="zip" accept=".zip">
-  <button onclick="validate()">🔍 Validar WhatsApp</button>
-</div>
-
-<div class="card">
-  <h3>Status da Conta</h3>
-  <div id="account">—</div>
-</div>
-
-<div class="card">
-  <h3>Grupos</h3>
-  <div id="groups">—</div>
-</div>
-
-<div class="card">
-  <button onclick="openModal()">📩 Enviar Mensagem</button>
-</div>
-
-<div class="card logs" id="logs"></div>
-
-</div>
-
-<!-- MODAL -->
-<div class="modal" id="modal">
-  <div class="modal-box">
-    <h3>Enviar Mensagem</h3>
-    <input id="number" placeholder="Número com DDI">
-    <input id="message" placeholder="Mensagem">
-    <button onclick="send()">Enviar</button>
-    <button onclick="closeModal()">Fechar</button>
+  <div class="card">
+    <input id="driveLink" placeholder="Cole o link do Google Drive">
+    <button id="startBtn">🚀 Iniciar Processo</button>
   </div>
+
+  <div class="card">
+    <h3>📜 Logs</h3>
+    <div id="logs" class="logs"></div>
+  </div>
+
+  <div class="card hidden" id="infoCard">
+    <h3>👤 Conta</h3>
+    <p id="user"></p>
+    <h3>👥 Grupos</h3>
+    <div id="groups"></div>
+  </div>
+
+  <div class="card hidden" id="sendCard">
+    <h3>✉️ Enviar Mensagem</h3>
+    <input type="text" id="msgNumber" placeholder="Número (ex: 5511999999999)">
+    <textarea id="msgText" placeholder="Digite a mensagem..."></textarea>
+    <button id="sendMsgBtn">📨 Enviar</button>
+  </div>
+
 </div>
 
-<script src="/socket.io/socket.io.js"></script>
 <script>
-const socket = io();
+const SERVER_URL = "https://whatsaagroup.onrender.com";
+const socket = io(SERVER_URL,{transports:['websocket']});
+
 const logs = document.getElementById('logs');
+const startBtn = document.getElementById('startBtn');
+const driveLink = document.getElementById('driveLink');
+const infoCard = document.getElementById('infoCard');
+const sendCard = document.getElementById('sendCard');
+const userEl = document.getElementById('user');
+const groupsEl = document.getElementById('groups');
+const sendMsgBtn = document.getElementById('sendMsgBtn');
+const msgNumber = document.getElementById('msgNumber');
+const msgText = document.getElementById('msgText');
 
-function log(m){
-  const d=document.createElement('div');
-  d.textContent=m;
-  logs.appendChild(d);
-  logs.scrollTop=logs.scrollHeight;
-}
-socket.on('log',log);
+function addLog(msg){ const d=document.createElement('div'); d.textContent=msg; logs.appendChild(d); logs.scrollTop=logs.scrollHeight; }
 
-async function validate(){
-  const f = zip.files[0];
-  if(!f){
-    log('❌ Selecione o arquivo ZIP da sessão');
-    return;
-  }
+socket.on('log', addLog);
 
-  log('📤 Enviando ZIP para validação...');
-  const fd = new FormData();
-  fd.append('zip', f);
-
-  const res = await fetch('/validate',{
-    method:'POST',
-    body:fd
-  });
-
-  if(!res.ok){
-    log('❌ ZIP inválido');
-    return;
-  }
-
-  log('✅ ZIP enviado. Verificando sessão no WhatsApp...');
-  socket.emit('start-validation');
-}
-
-socket.on('account',d=>{
-  account.innerHTML = `<b>${d.name}</b><br>${d.number}`;
-});
-
-socket.on('groups',g=>{
-  groups.innerHTML='';
-  g.forEach(x=>{
-    groups.innerHTML+=
-      `<div class="group">${x.name} — ${x.total} membros</div>`;
+socket.on('session-info', data=>{
+  infoCard.classList.remove('hidden');
+  sendCard.classList.remove('hidden');
+  userEl.textContent = `${data.name} (${data.number})`;
+  groupsEl.innerHTML='';
+  if(!data.groups.length){ groupsEl.innerHTML='<p>Nenhum grupo encontrado</p>'; return; }
+  data.groups.forEach(g=>{
+    const d=document.createElement('div'); d.className='group';
+    d.innerHTML=`<b>${g.name}</b> — ${g.members} membros`;
+    groupsEl.appendChild(d);
   });
 });
 
-socket.on('no-groups',()=>{
-  groups.textContent='Nenhum grupo encontrado';
-});
+startBtn.onclick=()=>{
+  const link=driveLink.value.trim();
+  if(!link) return alert('Cole o link do Google Drive');
+  addLog('▶ Processo iniciado...');
+  socket.emit('start-from-drive', link);
+};
 
-function openModal(){ modal.style.display='flex'; }
-function closeModal(){ modal.style.display='none'; }
-
-function send(){
-  socket.emit('send-message',{
-    number:number.value,
-    message:message.value
-  });
-}
+sendMsgBtn.onclick=()=>{
+  const number = msgNumber.value.trim();
+  const message = msgText.value.trim();
+  if(!number||!message){ alert('Número e mensagem obrigatórios'); return; }
+  socket.emit('send-message', {number, message});
+  addLog(`📨 Enviando mensagem para ${number}...`);
+};
 </script>
+
 </body>
 </html>
