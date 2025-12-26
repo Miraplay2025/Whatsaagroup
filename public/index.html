@@ -1,101 +1,104 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="pt">
 <head>
 <meta charset="UTF-8">
-<title>WhatsApp Session via Drive</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WhatsApp Session Manager</title>
 <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 
 <style>
-body { font-family: Arial; background: linear-gradient(135deg,#141e30,#243b55); color:#fff; padding:20px; }
-.container { max-width:900px; margin:auto; }
-.card { background:rgba(255,255,255,.08); padding:20px; border-radius:14px; margin-bottom:20px; }
-input,button,textarea { width:100%; padding:14px; margin-top:10px; border:none; border-radius:10px; }
-button { background:#25D366; font-weight:bold; cursor:pointer; }
-button:disabled { background:#777; cursor:not-allowed; }
-.logs { background:#000; color:#0f0; height:260px; overflow:auto; padding:10px; }
-.group { border-bottom:1px solid rgba(255,255,255,.2); padding:8px 0; }
-.hidden { display:none; }
+body {
+  font-family: Arial, sans-serif;
+  background: linear-gradient(135deg,#0f2027,#203a43,#2c5364);
+  color:#fff;
+  padding:20px;
+}
+.container {
+  max-width:700px;
+  margin:auto;
+  background:#111;
+  border-radius:12px;
+  padding:20px;
+}
+input, textarea, button {
+  width:100%;
+  margin-top:10px;
+  padding:12px;
+  border-radius:8px;
+  border:none;
+}
+button {
+  background:#25D366;
+  color:#000;
+  font-weight:bold;
+  cursor:pointer;
+}
+.logs {
+  background:#000;
+  padding:10px;
+  margin-top:15px;
+  height:200px;
+  overflow:auto;
+  font-size:14px;
+}
+.group {
+  background:#1e1e1e;
+  margin-top:8px;
+  padding:8px;
+  border-radius:6px;
+}
 </style>
 </head>
 
 <body>
 <div class="container">
-  <h1>📦 WhatsApp via Google Drive</h1>
+  <h2>WhatsApp Session</h2>
 
-  <div class="card">
-    <input id="driveLink" placeholder="Cole o link do Google Drive">
-    <button id="startBtn">🚀 Iniciar Processo</button>
-  </div>
+  <input id="driveLink" placeholder="Cole o link do ZIP (Google Drive)">
+  <button onclick="start()">Conectar WhatsApp</button>
 
-  <div class="card">
-    <h3>📜 Logs</h3>
-    <div id="logs" class="logs"></div>
-  </div>
+  <div class="logs" id="logs"></div>
 
-  <div class="card hidden" id="infoCard">
-    <h3>👤 Conta</h3>
-    <p id="user"></p>
-    <h3>👥 Grupos</h3>
-    <div id="groups"></div>
-  </div>
+  <h3>Enviar Mensagem</h3>
+  <input id="number" placeholder="Número com DDD">
+  <textarea id="message" placeholder="Mensagem"></textarea>
+  <button onclick="sendMsg()">Enviar</button>
 
-  <div class="card hidden" id="sendCard">
-    <h3>✉️ Enviar Mensagem</h3>
-    <input type="text" id="msgNumber" placeholder="Número (ex: 5511999999999)">
-    <textarea id="msgText" placeholder="Digite a mensagem..."></textarea>
-    <button id="sendMsgBtn">📨 Enviar</button>
-  </div>
-
+  <h3>Grupos</h3>
+  <div id="groups"></div>
 </div>
 
 <script>
-const SERVER_URL = "https://whatsaagroup.onrender.com";
-const socket = io(SERVER_URL,{transports:['websocket']});
+const socket = io('https://whatsaagroup.onrender.com');
 
-const logs = document.getElementById('logs');
-const startBtn = document.getElementById('startBtn');
-const driveLink = document.getElementById('driveLink');
-const infoCard = document.getElementById('infoCard');
-const sendCard = document.getElementById('sendCard');
-const userEl = document.getElementById('user');
-const groupsEl = document.getElementById('groups');
-const sendMsgBtn = document.getElementById('sendMsgBtn');
-const msgNumber = document.getElementById('msgNumber');
-const msgText = document.getElementById('msgText');
+function log(msg){
+  const div = document.getElementById('logs');
+  div.innerHTML += msg + '<br>';
+  div.scrollTop = div.scrollHeight;
+}
 
-function addLog(msg){ const d=document.createElement('div'); d.textContent=msg; logs.appendChild(d); logs.scrollTop=logs.scrollHeight; }
+socket.on('log', log);
 
-socket.on('log', addLog);
-
-socket.on('session-info', data=>{
-  infoCard.classList.remove('hidden');
-  sendCard.classList.remove('hidden');
-  userEl.textContent = `${data.name} (${data.number})`;
-  groupsEl.innerHTML='';
-  if(!data.groups.length){ groupsEl.innerHTML='<p>Nenhum grupo encontrado</p>'; return; }
-  data.groups.forEach(g=>{
-    const d=document.createElement('div'); d.className='group';
-    d.innerHTML=`<b>${g.name}</b> — ${g.members} membros`;
-    groupsEl.appendChild(d);
+socket.on('session-info', data => {
+  log('📊 Informações carregadas');
+  document.getElementById('groups').innerHTML = '';
+  data.groups.forEach(g => {
+    document.getElementById('groups').innerHTML +=
+      `<div class="group">📌 ${g.name} — 👥 ${g.members}</div>`;
   });
 });
 
-startBtn.onclick=()=>{
-  const link=driveLink.value.trim();
-  if(!link) return alert('Cole o link do Google Drive');
-  addLog('▶ Processo iniciado...');
+function start(){
+  const link = document.getElementById('driveLink').value;
   socket.emit('start-from-drive', link);
-};
+}
 
-sendMsgBtn.onclick=()=>{
-  const number = msgNumber.value.trim();
-  const message = msgText.value.trim();
-  if(!number||!message){ alert('Número e mensagem obrigatórios'); return; }
-  socket.emit('send-message', {number, message});
-  addLog(`📨 Enviando mensagem para ${number}...`);
-};
+function sendMsg(){
+  socket.emit('send-message',{
+    number: number.value,
+    message: message.value
+  });
+}
 </script>
-
 </body>
 </html>
