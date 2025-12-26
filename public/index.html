@@ -53,17 +53,13 @@ button{background:#00c853;color:#fff;cursor:pointer}
 <div class="container">
 
 <div class="card">
-  <h2>Upload da Sessão WhatsApp</h2>
+  <h2>Validar Sessão WhatsApp</h2>
   <input type="file" id="zip" accept=".zip">
-  <button onclick="upload()">📁 Enviar ZIP</button>
-</div>
-
-<div class="card">
   <button onclick="validate()">🔍 Validar WhatsApp</button>
 </div>
 
 <div class="card">
-  <h3>Conta</h3>
+  <h3>Status da Conta</h3>
   <div id="account">—</div>
 </div>
 
@@ -104,17 +100,29 @@ function log(m){
 }
 socket.on('log',log);
 
-async function upload(){
+async function validate(){
   const f = zip.files[0];
-  if(!f){ log('❌ Selecione um ZIP'); return; }
-  const fd = new FormData();
-  fd.append('zip',f);
-  await fetch('/upload',{method:'POST',body:fd});
-  log('📁 ZIP enviado com sucesso');
-}
+  if(!f){
+    log('❌ Selecione o arquivo ZIP da sessão');
+    return;
+  }
 
-function validate(){
-  socket.emit('validate-whatsapp');
+  log('📤 Enviando ZIP para validação...');
+  const fd = new FormData();
+  fd.append('zip', f);
+
+  const res = await fetch('/validate',{
+    method:'POST',
+    body:fd
+  });
+
+  if(!res.ok){
+    log('❌ ZIP inválido');
+    return;
+  }
+
+  log('✅ ZIP enviado. Verificando sessão no WhatsApp...');
+  socket.emit('start-validation');
 }
 
 socket.on('account',d=>{
