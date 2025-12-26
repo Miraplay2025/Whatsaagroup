@@ -4,9 +4,9 @@ const { Server } = require('socket.io');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const cors = require('cors');
 const AdmZip = require('adm-zip');
-const fetch = require('node-fetch');
 const fs = require('fs');
 const path = require('path');
+const axios = require('axios');
 
 const app = express();
 const server = http.createServer(app);
@@ -18,76 +18,58 @@ app.use(express.static('public'));
 
 let clientInstance = null;
 
+/* =========================
+   LOG CENTRAL
+========================= */
 function log(socket, msg) {
   console.log(msg);
   socket.emit('log', msg);
 }
 
 /* =========================
-   GOOGLE DRIVE DOWNLOAD
+   BAIXAR ZIP DO DRIVE
 ========================= */
-async function downloadFromDrive(link, socket) {
-  log(socket, '🔍 Extraindo ID do arquivo...');
-  const match = link.match(/[-\w]{25,}/);
-  if (!match) throw new Error('Link inválido');
+async function downloadZipFromDrive(driveLink, socket) {
+  log(socket, '⬇️ Baixando arquivo ZIP...');
 
-  const fileId = match[0];
+  const match = driveLink.match(/\/d\/([^/]+)/);
+  if (!match) throw new Error('Link do Drive inválido');
+
+  const fileId = match[1];
   const downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
-  log(socket, '⬇️ Baixando arquivo do Google Drive...');
 
-  const res = await fetch(downloadUrl);
-  if (!res.ok) throw new Error('Falha ao baixar arquivo');
-
-  const buffer = await res.buffer();
   const zipPath = path.join(__dirname, 'session.zip');
-  fs.writeFileSync(zipPath, buffer);
+  const response = await axios({
+    url: downloadUrl,
+    method: 'GET',
+    responseType: 'stream'
+  });
 
-  log(socket, '✅ Arquivo baixado com sucesso');
+  await new Promise((resolve, reject) => {
+    const stream = fs.createWriteStream(zipPath);
+    response.data.pipe(stream);
+    stream.on('finish', resolve);
+    stream.on('error', reject);
+  });
+
+  log(socket, '✅ Arquivo ZIP baixado com sucesso');
   return zipPath;
 }
 
 /* =========================
-   VALIDAR ZIP
+   EXTRAIR ZIP
 ========================= */
-function validateZip(zipPath, socket) {
-  log(socket, '🧪 Validando arquivo ZIP...');
+function extractZip(zipPath, socket) {
+  log(socket, '📦 Extraindo arquivos da sessão...');
   const zip = new AdmZip(zipPath);
-  const entries = zip.getEntries().map(e => e.entryName);
-  if (!entries.some(e => e.includes('.wwebjs_auth')))
-    throw new Error('Sessão WhatsApp não encontrada');
-  log(socket, '✅ ZIP validado como sessão WhatsApp');
-}
 
-/* =========================
-   EXTRAIR SESSÃO
-========================= */
-function extractSession(zipPath, socket) {
-  log(socket, '📂 Extraindo sessão...');
-  const zip = new AdmZip(zipPath);
-  zip.extractAllTo(__dirname, true);
+  const authDir = path.join(__dirname, '.wwebjs_auth');
+  if (!fs.existsSync(authDir)) fs.mkdirSync(authDir);
+
+  zip.extractAllTo(authDir, true);
   fs.unlinkSync(zipPath);
-  log(socket, '✅ Sessão pronta');
-}
 
-/* =========================
-   BUSCAR INFORMAÇÕES
-========================= */
-async function fetchSessionInfo(socket) {
-  if (!clientInstance) return;
-  log(socket, '🔎 Buscando informações da conta...');
-  const info = clientInstance.info;
-  const chats = await clientInstance.getChats();
-  const groups = chats.filter(c => c.isGroup);
-
-  socket.emit('session-info', {
-    name: info.pushname,
-    number: info.me.user,
-    groups: groups.map(g => ({
-      name: g.name,
-      members: g.participants?.length || 0
-    }))
-  });
-  log(socket, '🎉 Informações buscadas com sucesso');
+  log(socket, '✅ Arquivos extraídos');
 }
 
 /* =========================
@@ -95,8 +77,8 @@ async function fetchSessionInfo(socket) {
 ========================= */
 function startWhatsApp(socket) {
   if (clientInstance) {
-    log(socket, '⚠️ WhatsApp já estava conectado. Buscando informações...');
-    fetchSessionInfo(socket);
+    log(socket, 'ℹ️ WhatsApp já estava conectado, buscando informações...');
+    fetchInfo(socket);
     return;
   }
 
@@ -106,18 +88,22 @@ function startWhatsApp(socket) {
     authStrategy: new LocalAuth(),
     puppeteer: {
       headless: true,
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
-      args: ['--no-sandbox','--disable-setuid-sandbox']
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage'
+      ]
     }
   });
 
-  clientInstance.on('ready', async () => {
-    log(socket, '✅ WhatsApp conectado');
-    await fetchSessionInfo(socket);
+  clientInstance.on('ready', () => {
+    log(socket, '✅ WhatsApp conectado com sucesso');
+    fetchInfo(socket);
   });
 
   clientInstance.on('auth_failure', () => {
-    log(socket, '❌ Falha de autenticação');
+    log(socket, '❌ Sessão inválida ou expirada (ZIP não autenticou)');
     clientInstance = null;
   });
 
@@ -130,54 +116,64 @@ function startWhatsApp(socket) {
 }
 
 /* =========================
-   SOCKET.IO
+   BUSCAR INFORMAÇÕES
+========================= */
+async function fetchInfo(socket) {
+  const info = clientInstance.info;
+  log(socket, `👤 Conta: ${info.pushname} (${info.me.user})`);
+
+  const chats = await clientInstance.getChats();
+  const groups = chats.filter(c => c.isGroup);
+
+  log(socket, `📦 Grupos encontrados: ${groups.length}`);
+
+  socket.emit('session-info', {
+    name: info.pushname,
+    number: info.me.user,
+    groups: groups.map(g => ({
+      name: g.name,
+      members: g.participants?.length || 0
+    }))
+  });
+}
+
+/* =========================
+   SOCKET
 ========================= */
 io.on('connection', socket => {
 
-  socket.on('start-from-drive', async link => {
+  socket.on('start-from-drive', async driveLink => {
     try {
-      // Se já conectado, apenas busca info
-      if (clientInstance) {
-        log(socket, '⚠️ WhatsApp já estava conectado. Buscando informações...');
-        await fetchSessionInfo(socket);
-        return;
-      }
-
-      const zipPath = await downloadFromDrive(link, socket);
-      validateZip(zipPath, socket);
-      extractSession(zipPath, socket);
+      const zipPath = await downloadZipFromDrive(driveLink, socket);
+      extractZip(zipPath, socket);
+      log(socket, '🔐 Tentando autenticar no WhatsApp...');
       startWhatsApp(socket);
-
     } catch (e) {
-      log(socket, `❌ Erro: ${e.message}`);
+      log(socket, '❌ Erro: ' + e.message);
     }
   });
 
   socket.on('send-message', async data => {
     if (!clientInstance) {
-      log(socket, '❌ WhatsApp não está conectado');
-      return;
-    }
-    if (!data.number || !data.message) {
-      log(socket, '❌ Número ou mensagem inválidos');
+      log(socket, '❌ WhatsApp não conectado');
       return;
     }
 
-    const numberId = data.number.replace(/\D/g, '') + '@c.us';
+    const number = data.number.replace(/\D/g, '') + '@c.us';
     log(socket, `📨 Enviando mensagem para ${data.number}...`);
 
     try {
-      await clientInstance.sendMessage(numberId, data.message);
-      log(socket, '✅ Mensagem enviada com sucesso');
-    } catch (e) {
-      log(socket, `❌ Erro ao enviar mensagem: ${e.message}`);
+      await clientInstance.sendMessage(number, data.message);
+      log(socket, '✅ Mensagem enviada');
+    } catch {
+      log(socket, '❌ Falha ao enviar mensagem');
     }
   });
 
 });
 
 /* =========================
-   START SERVER
+   START
 ========================= */
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
