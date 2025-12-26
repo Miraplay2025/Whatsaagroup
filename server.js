@@ -16,6 +16,7 @@ app.use(cors());
 app.use(express.static('public'));
 
 const upload = multer({ dest:'uploads/' });
+
 let client = null;
 let sessionId = null;
 
@@ -25,21 +26,27 @@ function log(socket,msg){
 }
 
 /* =========================
-   UPLOAD DO ZIP DA SESSÃO
+   VALIDAR WHATSAPP (ZIP)
 ========================= */
-app.post('/upload', upload.single('zip'), (req,res)=>{
-  if(!req.file) return res.status(400).send('ZIP não enviado');
+app.post('/validate', upload.single('zip'), async (req,res)=>{
+  if(!req.file){
+    return res.status(400).json({ error:'ZIP não enviado' });
+  }
+
+  // Limpa sessões antigas
+  if (fs.existsSync('.wwebjs_auth')) {
+    fs.rmSync('.wwebjs_auth', { recursive:true, force:true });
+  }
 
   const zip = new AdmZip(req.file.path);
   zip.extractAllTo('.wwebjs_auth', true);
   fs.unlinkSync(req.file.path);
 
-  // Detecta automaticamente o nome da sessão dentro do ZIP
   const sessions = fs.readdirSync('.wwebjs_auth')
     .filter(f => f.startsWith('session-'));
 
   if(!sessions.length){
-    return res.status(400).send('Nenhuma sessão encontrada no ZIP');
+    return res.status(400).json({ error:'Nenhuma sessão encontrada no ZIP' });
   }
 
   sessionId = sessions[0].replace('session-','');
@@ -51,21 +58,13 @@ app.post('/upload', upload.single('zip'), (req,res)=>{
 ========================= */
 io.on('connection', socket=>{
 
-  socket.on('validate-whatsapp', async ()=>{
+  socket.on('start-validation', async ()=>{
     if(!sessionId){
       log(socket,'❌ Nenhuma sessão carregada');
-      socket.emit('invalid');
       return;
     }
 
-    log(socket,'🔍 Validando sessão do WhatsApp...');
-
-    const authPath = path.join(__dirname,'.wwebjs_auth',`session-${sessionId}`);
-    if(!fs.existsSync(authPath)){
-      log(socket,'❌ Sessão inválida');
-      socket.emit('invalid');
-      return;
-    }
+    log(socket,'🔍 Sessão encontrada, validando no WhatsApp...');
 
     client = new Client({
       authStrategy: new LocalAuth({ clientId:sessionId }),
@@ -76,8 +75,9 @@ io.on('connection', socket=>{
     });
 
     client.on('ready', async ()=>{
-      const info = client.info;
+      log(socket,'✅ Sessão válida! Buscando informações...');
 
+      const info = client.info;
       socket.emit('account',{
         name: info.pushname,
         number: info.wid.user
@@ -95,12 +95,11 @@ io.on('connection', socket=>{
         })));
       }
 
-      log(socket,'✅ Sessão ATIVA e validada com sucesso');
+      log(socket,'📊 Informações carregadas com sucesso');
     });
 
     client.on('auth_failure', ()=>{
-      log(socket,'❌ Falha de autenticação – sessão inválida');
-      socket.emit('invalid');
+      log(socket,'❌ Sessão inválida ou expirada');
     });
 
     client.initialize();
