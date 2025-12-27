@@ -4,9 +4,9 @@ const { Server } = require('socket.io');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const cors = require('cors');
 const AdmZip = require('adm-zip');
-const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const { exec } = require('child_process');
 
 const app = express();
 const server = http.createServer(app);
@@ -17,10 +17,12 @@ app.use(express.json());
 app.use(express.static('public'));
 
 const SESSION_DIR = path.join(__dirname, '.wwebjs_auth');
+const ZIP_PATH = path.join(__dirname, 'session.zip');
+
 let clientInstance = null;
 
 /* =========================
-   LOG CENTRAL (100% VISÍVEL)
+   LOG CENTRAL
 ========================= */
 function log(socket, msg) {
   console.log(msg);
@@ -28,7 +30,74 @@ function log(socket, msg) {
 }
 
 /* =========================
-   AGUARDAR INFO REAL DO WHATSAPP
+   LIMPAR SESSÃO
+========================= */
+function clearSession() {
+  if (fs.existsSync(SESSION_DIR)) {
+    fs.rmSync(SESSION_DIR, { recursive: true, force: true });
+  }
+}
+
+/* =========================
+   VALIDAR ZIP REAL
+========================= */
+function isZipFile(filePath) {
+  const fd = fs.openSync(filePath, 'r');
+  const buffer = Buffer.alloc(2);
+  fs.readSync(fd, buffer, 0, 2, 0);
+  fs.closeSync(fd);
+  return buffer.toString() === 'PK';
+}
+
+/* =========================
+   DOWNLOAD COM CURL (ROBUSTO)
+========================= */
+function downloadWithCurl(socket, url) {
+  return new Promise((resolve, reject) => {
+    log(socket, '⬇️ Baixando arquivo ZIP (curl)...');
+
+    if (fs.existsSync(ZIP_PATH)) fs.unlinkSync(ZIP_PATH);
+
+    const cmd = `curl -L --fail --silent --show-error "${url}" -o "${ZIP_PATH}"`;
+
+    exec(cmd, (error) => {
+      if (error) {
+        return reject(new Error('Falha ao baixar arquivo (curl)'));
+      }
+
+      if (!fs.existsSync(ZIP_PATH)) {
+        return reject(new Error('Arquivo não foi baixado'));
+      }
+
+      if (!isZipFile(ZIP_PATH)) {
+        fs.unlinkSync(ZIP_PATH);
+        return reject(
+          new Error('Arquivo baixado NÃO é um ZIP válido')
+        );
+      }
+
+      log(socket, '✅ Arquivo ZIP baixado com sucesso');
+      resolve(ZIP_PATH);
+    });
+  });
+}
+
+/* =========================
+   EXTRAIR ZIP
+========================= */
+function extractZip(socket) {
+  log(socket, '📦 Extraindo arquivos da sessão...');
+  clearSession();
+
+  const zip = new AdmZip(ZIP_PATH);
+  zip.extractAllTo(SESSION_DIR, true);
+
+  fs.unlinkSync(ZIP_PATH);
+  log(socket, '✅ Arquivos extraídos');
+}
+
+/* =========================
+   AGUARDAR INFO REAL
 ========================= */
 async function waitForClientInfo(client, timeout = 20000) {
   const start = Date.now();
@@ -42,45 +111,44 @@ async function waitForClientInfo(client, timeout = 20000) {
 }
 
 /* =========================
-   LIMPAR SESSÃO ANTERIOR
+   BUSCAR INFO + GRUPOS
 ========================= */
-function clearSession() {
-  if (fs.existsSync(SESSION_DIR)) {
-    fs.rmSync(SESSION_DIR, { recursive: true, force: true });
+async function fetchInfo(socket) {
+  try {
+    log(socket, '⏳ Buscando informações da conta...');
+    const info = await waitForClientInfo(clientInstance);
+
+    const name = info.pushname || 'Sem nome';
+    const number = info.me?.user || 'Desconhecido';
+
+    log(socket, `👤 Conta: ${name} (${number})`);
+
+    let chats = [];
+    try {
+      chats = await clientInstance.getChats();
+    } catch {
+      log(socket, '⚠️ Erro ao buscar chats');
+    }
+
+    const groups = chats.filter(c => c.isGroup);
+    log(socket, `📦 Grupos encontrados: ${groups.length}`);
+
+    socket.emit('session-info', {
+      name,
+      number,
+      groups: groups.map(g => ({
+        name: g.name,
+        members: g.participants?.length || 0
+      }))
+    });
+
+  } catch (err) {
+    log(socket, `❌ Erro ao obter informações: ${err.message}`);
   }
 }
 
 /* =========================
-   BAIXAR ZIP DO DRIVE
-========================= */
-async function downloadZip(socket, fileUrl) {
-  log(socket, '⬇️ Baixando arquivo ZIP...');
-
-  const res = await axios.get(fileUrl, { responseType: 'arraybuffer' });
-  const zipPath = path.join(__dirname, 'session.zip');
-
-  fs.writeFileSync(zipPath, res.data);
-  log(socket, '✅ Arquivo ZIP baixado com sucesso');
-
-  return zipPath;
-}
-
-/* =========================
-   EXTRAIR ZIP (SEM VALIDAR)
-========================= */
-function extractZip(socket, zipPath) {
-  log(socket, '📦 Extraindo arquivos da sessão...');
-
-  clearSession();
-  const zip = new AdmZip(zipPath);
-  zip.extractAllTo(SESSION_DIR, true);
-
-  fs.unlinkSync(zipPath);
-  log(socket, '✅ Arquivos extraídos');
-}
-
-/* =========================
-   INICIAR WHATSAPP (QUEM VALIDA É ELE)
+   INICIAR WHATSAPP
 ========================= */
 async function startWhatsApp(socket) {
   if (clientInstance) {
@@ -125,51 +193,15 @@ async function startWhatsApp(socket) {
 }
 
 /* =========================
-   BUSCAR INFO + GRUPOS
-========================= */
-async function fetchInfo(socket) {
-  try {
-    log(socket, '⏳ Buscando informações da conta...');
-    const info = await waitForClientInfo(clientInstance);
-
-    const name = info.pushname || 'Sem nome';
-    const number = info.me?.user || 'Desconhecido';
-
-    log(socket, `👤 Conta: ${name} (${number})`);
-
-    let chats = [];
-    try {
-      chats = await clientInstance.getChats();
-    } catch {
-      log(socket, '⚠️ Erro ao buscar chats');
-    }
-
-    const groups = chats.filter(c => c.isGroup);
-    log(socket, `📦 Grupos encontrados: ${groups.length}`);
-
-    socket.emit('session-info', {
-      name,
-      number,
-      groups: groups.map(g => ({
-        name: g.name,
-        members: g.participants?.length || 0
-      }))
-    });
-
-  } catch (err) {
-    log(socket, `❌ Erro ao obter informações: ${err.message}`);
-  }
-}
-
-/* =========================
    SOCKET.IO
 ========================= */
 io.on('connection', socket => {
 
-  socket.on('start-from-link', async fileUrl => {
+  socket.on('start-from-link', async url => {
     try {
-      const zipPath = await downloadZip(socket, fileUrl);
-      extractZip(socket, zipPath);
+      log(socket, '🚀 Iniciando processo...');
+      await downloadWithCurl(socket, url);
+      extractZip(socket);
       await startWhatsApp(socket);
     } catch (err) {
       log(socket, `❌ Erro geral: ${err.message}`);
