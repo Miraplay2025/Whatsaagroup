@@ -1,104 +1,112 @@
 <!DOCTYPE html>
-<html lang="pt">
+<html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
+<title>Restore WhatsApp Session</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>WhatsApp Session Manager</title>
-<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 
 <style>
 body {
-  font-family: Arial, sans-serif;
-  background: linear-gradient(135deg,#0f2027,#203a43,#2c5364);
+  background: linear-gradient(135deg,#00c6ff,#0072ff);
+  font-family: Arial;
+  padding:20px;
   color:#fff;
-  padding:20px;
 }
-.container {
-  max-width:700px;
+.card {
+  max-width:420px;
+  background:#fff;
+  color:#000;
+  padding:20px;
+  border-radius:15px;
   margin:auto;
-  background:#111;
-  border-radius:12px;
-  padding:20px;
 }
-input, textarea, button {
+input, button {
   width:100%;
+  padding:14px;
   margin-top:10px;
-  padding:12px;
-  border-radius:8px;
+  border-radius:10px;
   border:none;
 }
 button {
-  background:#25D366;
-  color:#000;
-  font-weight:bold;
-  cursor:pointer;
+  background:#0072ff;
+  color:#fff;
 }
-.logs {
-  background:#000;
+.log {
+  background:#111;
+  color:#0f0;
   padding:10px;
-  margin-top:15px;
-  height:200px;
+  height:150px;
   overflow:auto;
-  font-size:14px;
+  margin-top:15px;
 }
 .group {
-  background:#1e1e1e;
-  margin-top:8px;
-  padding:8px;
-  border-radius:6px;
+  background:#f1f1f1;
+  padding:10px;
+  margin-top:5px;
+  border-radius:8px;
 }
 </style>
 </head>
 
 <body>
-<div class="container">
-  <h2>WhatsApp Session</h2>
 
-  <input id="driveLink" placeholder="Cole o link do ZIP (Google Drive)">
-  <button onclick="start()">Conectar WhatsApp</button>
+<div class="card">
+  <h2>Restaurar Sessão WhatsApp</h2>
 
-  <div class="logs" id="logs"></div>
+  <input type="file" id="file">
+  <input placeholder="Ou cole link do ZIP" id="url">
 
-  <h3>Enviar Mensagem</h3>
-  <input id="number" placeholder="Número com DDD">
-  <textarea id="message" placeholder="Mensagem"></textarea>
-  <button onclick="sendMsg()">Enviar</button>
+  <button onclick="restore()">Restaurar Sessão</button>
 
-  <h3>Grupos</h3>
-  <div id="groups"></div>
+  <div class="log" id="log"></div>
+
+  <div id="result"></div>
 </div>
 
+<script src="/socket.io/socket.io.js"></script>
 <script>
-const socket = io('https://whatsaagroup.onrender.com');
+const socket = io();
+const logBox = document.getElementById('log');
 
 function log(msg){
-  const div = document.getElementById('logs');
-  div.innerHTML += msg + '<br>';
-  div.scrollTop = div.scrollHeight;
+  logBox.innerHTML += msg + '<br>';
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+function restore(){
+  const file = document.getElementById('file').files[0];
+  const url = document.getElementById('url').value;
+
+  if (file) {
+    socket.emit('restore-session', {
+      type:'upload',
+      file
+    });
+  } else if (url) {
+    socket.emit('restore-session', {
+      type:'url',
+      url
+    });
+  } else {
+    alert('Envie um ZIP ou link');
+  }
 }
 
 socket.on('log', log);
 
-socket.on('session-info', data => {
-  log('📊 Informações carregadas');
-  document.getElementById('groups').innerHTML = '';
-  data.groups.forEach(g => {
-    document.getElementById('groups').innerHTML +=
-      `<div class="group">📌 ${g.name} — 👥 ${g.members}</div>`;
-  });
+socket.on('session-data', data => {
+  const r = document.getElementById('result');
+  r.innerHTML = `
+    <h3>${data.name} (${data.number})</h3>
+    <h4>Grupos</h4>
+    ${data.groups.map(g => `
+      <div class="group">
+        ${g.name} - ${g.members} membros
+      </div>
+    `).join('')}
+  `;
 });
-
-function start(){
-  const link = document.getElementById('driveLink').value;
-  socket.emit('start-from-drive', link);
-}
-
-function sendMsg(){
-  socket.emit('send-message',{
-    number: number.value,
-    message: message.value
-  });
-}
 </script>
+
 </body>
 </html>
