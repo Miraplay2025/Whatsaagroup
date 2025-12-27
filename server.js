@@ -14,117 +14,178 @@ const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
 app.use(cors());
+app.use(express.json());
 app.use(express.static('public'));
 app.use(fileUpload());
 
-const SESSIONS_DIR = path.join(__dirname, 'sessions');
-if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR);
+const BASE = __dirname;
+const TEMP = path.join(BASE, 'temp');
+const SESSIONS = path.join(BASE, 'sessions');
 
-function log(socket, msg) {
+[TEMP, SESSIONS].forEach(d => !fs.existsSync(d) && fs.mkdirSync(d));
+
+let socketRef = null;
+
+function log(msg, type='info') {
   console.log(msg);
-  socket.emit('log', msg);
+  if (socketRef) socketRef.emit('log', { msg, type });
 }
 
-/* ======================
-   DOWNLOAD ZIP (URL)
-====================== */
-async function downloadZip(url, dest) {
-  const res = await axios({ url, method: 'GET', responseType: 'stream' });
-  return new Promise((resolve, reject) => {
-    const stream = fs.createWriteStream(dest);
-    res.data.pipe(stream);
-    stream.on('finish', resolve);
-    stream.on('error', reject);
+/* =========================
+   VALIDAR ZIP REAL
+========================= */
+function isValidZip(file) {
+  const fd = fs.openSync(file, 'r');
+  const buffer = Buffer.alloc(4);
+  fs.readSync(fd, buffer, 0, 4, 0);
+  fs.closeSync(fd);
+  return buffer.toString('hex') === '504b0304';
+}
+
+/* =========================
+   EXTRAIR ZIP
+========================= */
+async function extract(zip, dest) {
+  await fs.createReadStream(zip)
+    .pipe(unzipper.Extract({ path: dest }))
+    .promise();
+}
+
+/* =========================
+   INICIAR WHATSAPP
+========================= */
+function startWhatsApp(sessionPath) {
+  log('🚀 Iniciando WhatsApp...');
+
+  const client = new Client({
+    authStrategy: new LocalAuth({ dataPath: sessionPath }),
+    puppeteer: {
+      headless: true,
+      args: ['--no-sandbox','--disable-setuid-sandbox']
+    }
   });
+
+  client.on('ready', async () => {
+    log('✅ Sessão válida e conectada', 'success');
+
+    const info = client.info;
+    const chats = await client.getChats();
+    const groups = chats.filter(c => c.isGroup);
+
+    const data = [];
+    for (const g of groups) {
+      await g.fetchParticipants();
+      data.push({
+        name: g.name,
+        members: g.participants.length
+      });
+    }
+
+    socketRef.emit('session-data', {
+      name: info.pushname,
+      number: info.wid.user,
+      groups: data
+    });
+  });
+
+  client.on('auth_failure', () => {
+    log('❌ Sessão inválida ou expirada', 'error');
+  });
+
+  client.on('disconnected', r => {
+    log('⚠️ Sessão desconectada: ' + r, 'warn');
+  });
+
+  client.initialize();
 }
 
-/* ======================
-   VALIDATE ZIP
-====================== */
-function isZip(filePath) {
-  return filePath.endsWith('.zip');
-}
+/* =========================
+   UPLOAD ZIP
+========================= */
+app.post('/upload', async (req, res) => {
+  try {
+    if (!req.files?.zip) {
+      return res.status(400).send('ZIP não enviado');
+    }
 
-/* ======================
-   SOCKET
-====================== */
-io.on('connection', socket => {
+    const name = 'session_' + Date.now();
+    const zipPath = path.join(TEMP, name + '.zip');
+    const sessionPath = path.join(SESSIONS, name);
 
-  socket.on('restore-session', async data => {
-    try {
-      const sessionName = `restore_${Date.now()}`;
-      const zipPath = path.join(__dirname, 'temp', `${sessionName}.zip`);
-      const sessionPath = path.join(SESSIONS_DIR, sessionName);
+    await req.files.zip.mv(zipPath);
 
-      if (!fs.existsSync('temp')) fs.mkdirSync('temp');
+    log('📥 ZIP recebido');
 
-      log(socket, '📥 Recebendo ZIP...');
+    if (!isValidZip(zipPath)) {
+      log('❌ Arquivo não é ZIP válido', 'error');
+      return res.status(400).send('Arquivo inválido');
+    }
 
-      if (data.type === 'upload') {
-        await data.file.mv(zipPath);
-      }
+    fs.mkdirSync(sessionPath);
+    log('📦 Extraindo sessão...');
+    await extract(zipPath, sessionPath);
 
-      if (data.type === 'url') {
-        await downloadZip(data.url, zipPath);
-      }
+    startWhatsApp(sessionPath);
+    res.sendStatus(200);
 
-      if (!isZip(zipPath)) {
-        log(socket, '❌ Arquivo não é ZIP');
+  } catch (e) {
+    log('❌ Erro: ' + e.message, 'error');
+    res.status(500).send('Erro interno');
+  }
+});
+
+/* =========================
+   RESTORE VIA URL
+========================= */
+app.post('/restore-url', async (req, res) => {
+  try {
+    const { url } = req.body;
+    if (!url) return res.sendStatus(400);
+
+    const name = 'session_' + Date.now();
+    const zipPath = path.join(TEMP, name + '.zip');
+    const sessionPath = path.join(SESSIONS, name);
+
+    log('🌐 Baixando ZIP...');
+
+    const response = await axios({
+      url,
+      method: 'GET',
+      responseType: 'stream',
+      maxRedirects: 5
+    });
+
+    const writer = fs.createWriteStream(zipPath);
+    response.data.pipe(writer);
+
+    writer.on('finish', async () => {
+      if (!isValidZip(zipPath)) {
+        log('❌ Download não é ZIP válido', 'error');
         return;
       }
 
-      log(socket, '📦 Extraindo sessão...');
       fs.mkdirSync(sessionPath);
+      log('📦 Extraindo sessão...');
+      await extract(zipPath, sessionPath);
+      startWhatsApp(sessionPath);
+    });
 
-      await fs.createReadStream(zipPath)
-        .pipe(unzipper.Extract({ path: sessionPath }))
-        .promise();
+    res.sendStatus(200);
 
-      log(socket, '🚀 Iniciando WhatsApp...');
+  } catch (e) {
+    log('❌ Erro URL: ' + e.message, 'error');
+    res.status(500).send();
+  }
+});
 
-      const client = new Client({
-        authStrategy: new LocalAuth({ dataPath: sessionPath }),
-        puppeteer: {
-          headless: true,
-          args: ['--no-sandbox']
-        }
-      });
-
-      client.on('ready', async () => {
-        log(socket, '✅ Sessão válida e conectada');
-
-        const info = client.info;
-        const chats = await client.getChats();
-        const groups = chats.filter(c => c.isGroup);
-
-        const groupData = [];
-        for (const g of groups) {
-          const meta = await g.getChat();
-          groupData.push({
-            name: meta.name,
-            members: meta.participants.length
-          });
-        }
-
-        socket.emit('session-data', {
-          number: info.wid.user,
-          name: info.pushname,
-          groups: groupData
-        });
-      });
-
-      client.on('auth_failure', () => {
-        log(socket, '❌ Sessão inválida ou expirada');
-      });
-
-      client.initialize();
-
-    } catch (e) {
-      log(socket, '❌ Erro: ' + e.message);
-    }
-  });
+/* =========================
+   SOCKET
+========================= */
+io.on('connection', socket => {
+  socketRef = socket;
+  log('🔌 Cliente conectado');
 });
 
 server.listen(10000, () =>
-  console.log('🚀 Restore server rodando na porta 10000')
+  console.log('🚀 Servidor rodando na porta 10000')
 );
