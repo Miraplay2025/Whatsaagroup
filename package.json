@@ -6,11 +6,11 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "latest",
-    "socket.io": "latest",
-    "whatsapp-web.js": "latest",
-    "multer": "latest",
-    "adm-zip": "latest",
-    "cors": "latest"
+    "express": "*",
+    "socket.io": "*",
+    "whatsapp-web.js": "*",
+    "cors": "*",
+    "adm-zip": "*",
+    "axios": "*"
   }
 }
