@@ -1,16 +1,17 @@
 {
-  "name": "whatsapp-upload-connect",
+  "name": "restore-whatsapp-session",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "*",
-    "socket.io": "*",
-    "whatsapp-web.js": "*",
+    "axios": "*",
     "cors": "*",
-    "adm-zip": "*",
-    "axios": "*"
+    "express": "*",
+    "express-fileupload": "*",
+    "socket.io": "*",
+    "unzipper": "*",
+    "whatsapp-web.js": "*"
   }
 }
