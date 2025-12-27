@@ -26,13 +26,13 @@ const SESSIONS = path.join(BASE, 'sessions');
 
 let socketRef = null;
 
-function log(msg, type='info') {
+function log(msg, type = 'info') {
   console.log(msg);
   if (socketRef) socketRef.emit('log', { msg, type });
 }
 
 /* =========================
-   VALIDAR ZIP REAL
+   ZIP VALIDATION (REAL)
 ========================= */
 function isValidZip(file) {
   const fd = fs.openSync(file, 'r');
@@ -43,7 +43,7 @@ function isValidZip(file) {
 }
 
 /* =========================
-   EXTRAIR ZIP
+   EXTRACT ZIP
 ========================= */
 async function extract(zip, dest) {
   await fs.createReadStream(zip)
@@ -52,7 +52,7 @@ async function extract(zip, dest) {
 }
 
 /* =========================
-   INICIAR WHATSAPP
+   START WHATSAPP WITH VALIDATION
 ========================= */
 function startWhatsApp(sessionPath) {
   log('🚀 Iniciando WhatsApp...');
@@ -65,8 +65,20 @@ function startWhatsApp(sessionPath) {
     }
   });
 
+  let validated = false;
+
+  const timeout = setTimeout(() => {
+    if (!validated) {
+      log('❌ Sessão inválida ou expirada (timeout)', 'error');
+      try { client.destroy(); } catch {}
+    }
+  }, 30000); // 30s
+
   client.on('ready', async () => {
-    log('✅ Sessão válida e conectada', 'success');
+    validated = true;
+    clearTimeout(timeout);
+
+    log('✅ Sessão VÁLIDA e conectada', 'success');
 
     const info = client.info;
     const chats = await client.getChats();
@@ -88,51 +100,32 @@ function startWhatsApp(sessionPath) {
     });
   });
 
-  client.on('auth_failure', () => {
-    log('❌ Sessão inválida ou expirada', 'error');
+  client.on('auth_failure', msg => {
+    validated = true;
+    clearTimeout(timeout);
+    log('❌ Falha de autenticação: ' + msg, 'error');
   });
 
-  client.on('disconnected', r => {
-    log('⚠️ Sessão desconectada: ' + r, 'warn');
+  client.on('disconnected', reason => {
+    if (!validated) {
+      clearTimeout(timeout);
+      log('❌ Sessão desconectada antes da validação: ' + reason, 'error');
+    } else {
+      log('⚠️ Sessão desconectada: ' + reason, 'warn');
+    }
+  });
+
+  client.on('change_state', state => {
+    log('🔄 Estado WhatsApp: ' + state);
+  });
+
+  client.on('error', err => {
+    clearTimeout(timeout);
+    log('❌ Erro interno WhatsApp: ' + err.message, 'error');
   });
 
   client.initialize();
 }
-
-/* =========================
-   UPLOAD ZIP
-========================= */
-app.post('/upload', async (req, res) => {
-  try {
-    if (!req.files?.zip) {
-      return res.status(400).send('ZIP não enviado');
-    }
-
-    const name = 'session_' + Date.now();
-    const zipPath = path.join(TEMP, name + '.zip');
-    const sessionPath = path.join(SESSIONS, name);
-
-    await req.files.zip.mv(zipPath);
-
-    log('📥 ZIP recebido');
-
-    if (!isValidZip(zipPath)) {
-      log('❌ Arquivo não é ZIP válido', 'error');
-      return res.status(400).send('Arquivo inválido');
-    }
-
-    fs.mkdirSync(sessionPath);
-    log('📦 Extraindo sessão...');
-    await extract(zipPath, sessionPath);
-
-    startWhatsApp(sessionPath);
-    res.sendStatus(200);
-
-  } catch (e) {
-    log('❌ Erro: ' + e.message, 'error');
-    res.status(500).send('Erro interno');
-  }
-});
 
 /* =========================
    RESTORE VIA URL
@@ -152,7 +145,8 @@ app.post('/restore-url', async (req, res) => {
       url,
       method: 'GET',
       responseType: 'stream',
-      maxRedirects: 5
+      maxRedirects: 5,
+      timeout: 20000
     });
 
     const writer = fs.createWriteStream(zipPath);
@@ -160,21 +154,54 @@ app.post('/restore-url', async (req, res) => {
 
     writer.on('finish', async () => {
       if (!isValidZip(zipPath)) {
-        log('❌ Download não é ZIP válido', 'error');
+        log('❌ Arquivo baixado NÃO é ZIP válido', 'error');
         return;
       }
 
       fs.mkdirSync(sessionPath);
       log('📦 Extraindo sessão...');
       await extract(zipPath, sessionPath);
+
       startWhatsApp(sessionPath);
     });
 
     res.sendStatus(200);
 
   } catch (e) {
-    log('❌ Erro URL: ' + e.message, 'error');
+    log('❌ Erro ao baixar ZIP: ' + e.message, 'error');
     res.status(500).send();
+  }
+});
+
+/* =========================
+   UPLOAD ZIP
+========================= */
+app.post('/upload', async (req, res) => {
+  try {
+    if (!req.files?.zip) return res.sendStatus(400);
+
+    const name = 'session_' + Date.now();
+    const zipPath = path.join(TEMP, name + '.zip');
+    const sessionPath = path.join(SESSIONS, name);
+
+    await req.files.zip.mv(zipPath);
+    log('📥 ZIP recebido');
+
+    if (!isValidZip(zipPath)) {
+      log('❌ Upload não é ZIP válido', 'error');
+      return res.sendStatus(400);
+    }
+
+    fs.mkdirSync(sessionPath);
+    log('📦 Extraindo sessão...');
+    await extract(zipPath, sessionPath);
+
+    startWhatsApp(sessionPath);
+    res.sendStatus(200);
+
+  } catch (e) {
+    log('❌ Erro upload: ' + e.message, 'error');
+    res.sendStatus(500);
   }
 });
 
@@ -186,6 +213,7 @@ io.on('connection', socket => {
   log('🔌 Cliente conectado');
 });
 
-server.listen(10000, () =>
-  console.log('🚀 Servidor rodando na porta 10000')
+const PORT = process.env.PORT || 10000;
+server.listen(PORT, () =>
+  console.log('🚀 Servidor rodando na porta ' + PORT)
 );
