@@ -2,64 +2,76 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<title>Restore WhatsApp Session</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Restore WhatsApp</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
 
 <style>
-body {
-  background: linear-gradient(135deg,#00c6ff,#0072ff);
-  font-family: Arial;
-  padding:20px;
+body{
+  background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);
   color:#fff;
+  font-family:Arial;
+  padding:20px
 }
-.card {
-  max-width:420px;
+.card{
   background:#fff;
   color:#000;
   padding:20px;
-  border-radius:15px;
-  margin:auto;
+  border-radius:14px;
+  max-width:420px;
+  margin:auto
 }
-input, button {
+input,button{
   width:100%;
   padding:14px;
   margin-top:10px;
   border-radius:10px;
   border:none;
+  font-size:15px
 }
-button {
-  background:#0072ff;
+button{
+  background:#1e90ff;
   color:#fff;
+  cursor:pointer
 }
-.log {
-  background:#111;
+.log{
+  background:#000;
   color:#0f0;
-  padding:10px;
-  height:150px;
+  height:180px;
   overflow:auto;
-  margin-top:15px;
-}
-.group {
-  background:#f1f1f1;
+  margin-top:12px;
   padding:10px;
-  margin-top:5px;
-  border-radius:8px;
+  font-size:13px;
+  border-radius:8px
 }
+.group{
+  background:#f1f1f1;
+  margin-top:6px;
+  padding:10px;
+  border-radius:8px
+}
+.success{color:#00ff7f}
+.error{color:#ff4d4d}
+.warn{color:#ffd700}
+small{color:#666}
 </style>
 </head>
 
 <body>
 
 <div class="card">
-  <h2>Restaurar Sessão WhatsApp</h2>
+  <h2>🔄 Restaurar Sessão WhatsApp</h2>
 
-  <input type="file" id="file">
-  <input placeholder="Ou cole link do ZIP" id="url">
+  <input type="file" id="zip">
+  <button onclick="upload()">📤 Upload ZIP</button>
 
-  <button onclick="restore()">Restaurar Sessão</button>
+  <hr>
+
+  <input id="url" placeholder="Cole link do Google Drive ou URL direta">
+  <button onclick="restoreUrl()">🌐 Restaurar por Link</button>
+
+  <small>Links do Google Drive são convertidos automaticamente</small>
 
   <div class="log" id="log"></div>
-
   <div id="result"></div>
 </div>
 
@@ -68,40 +80,83 @@ button {
 const socket = io();
 const logBox = document.getElementById('log');
 
-function log(msg){
-  logBox.innerHTML += msg + '<br>';
+function log(msg, type=''){
+  logBox.innerHTML += `<div class="${type}">${msg}</div>`;
   logBox.scrollTop = logBox.scrollHeight;
 }
 
-function restore(){
-  const file = document.getElementById('file').files[0];
-  const url = document.getElementById('url').value;
+/* ===========================
+   CONVERTER LINK DRIVE
+=========================== */
+function convertDriveLink(url){
+  try{
+    if(url.includes('drive.google.com')){
+      let id = null;
 
-  if (file) {
-    socket.emit('restore-session', {
-      type:'upload',
-      file
-    });
-  } else if (url) {
-    socket.emit('restore-session', {
-      type:'url',
-      url
-    });
-  } else {
-    alert('Envie um ZIP ou link');
-  }
+      // formato /file/d/ID/
+      const match1 = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
+      if(match1) id = match1[1];
+
+      // formato ?id=ID
+      const match2 = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+      if(match2) id = match2[1];
+
+      if(id){
+        const direct = `https://drive.google.com/uc?id=${id}&export=download`;
+        log('🔁 Link do Google Drive convertido automaticamente','warn');
+        return direct;
+      }
+    }
+  }catch(e){}
+  return url;
 }
 
-socket.on('log', log);
+/* ===========================
+   UPLOAD
+=========================== */
+async function upload(){
+  const f = document.getElementById('zip').files[0];
+  if(!f) return alert('Selecione um arquivo ZIP');
 
-socket.on('session-data', data => {
-  const r = document.getElementById('result');
-  r.innerHTML = `
-    <h3>${data.name} (${data.number})</h3>
-    <h4>Grupos</h4>
-    ${data.groups.map(g => `
+  const fd = new FormData();
+  fd.append('zip', f);
+
+  log('📤 Enviando ZIP...');
+  await fetch('/upload',{ method:'POST', body:fd });
+}
+
+/* ===========================
+   RESTORE URL
+=========================== */
+async function restoreUrl(){
+  let url = document.getElementById('url').value.trim();
+  if(!url) return alert('Cole o link');
+
+  url = convertDriveLink(url);
+  log('🌐 Enviando link para o servidor...');
+
+  await fetch('/restore-url',{
+    method:'POST',
+    headers:{ 'Content-Type':'application/json' },
+    body: JSON.stringify({ url })
+  });
+}
+
+/* ===========================
+   SOCKET EVENTS
+=========================== */
+socket.on('log', d=>{
+  log(d.msg, d.type);
+});
+
+socket.on('session-data', d=>{
+  document.getElementById('result').innerHTML = `
+    <h3>✅ ${d.name} (${d.number})</h3>
+    <h4>Grupos (${d.groups.length})</h4>
+    ${d.groups.map(g=>`
       <div class="group">
-        ${g.name} - ${g.members} membros
+        <strong>${g.name}</strong><br>
+        👥 ${g.members} membros
       </div>
     `).join('')}
   `;
@@ -110,3 +165,4 @@ socket.on('session-data', data => {
 
 </body>
 </html>
+
